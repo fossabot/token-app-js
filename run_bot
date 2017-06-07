@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$'\n\t'
+
+# check dependencies
+if ! command -v redis-server >/dev/null 2>&1; then
+    echo "ERROR: missing requirement: redis-server"
+    case $OSTYPE in
+        darwin*)
+            if command -v brew >/dev/null 2>&1; then
+                echo "Install with: brew install redis"
+            elif comman -v port >/dev/null 2>&1; then
+                echo "Install with: sudo port install redis"
+            else
+                echo "See https://redis.io/ for installation details"
+            fi
+            ;;
+        linux*)
+            if command -v apt-get >/dev/null 2>&1; then
+                echo "Install with: sudo apt-get install redis-server"
+            elif command -v pacman >/dev/null 2>&1; then
+                echo "Install with: sudo pacman -S redis"
+            else
+                echo "See https://redis.io/ for installation details"
+            fi
+            ;;
+        *)
+            echo "See https://redis.io/ for installation details"
+            ;;
+    esac
+    exit 1
+fi
+
+# check for arguments in command line
+for filename in "$@"; do
+    if [[ $filename == *.conf ]]; then
+        if [ ! -z ${CONFIG_FILE:-} ]; then
+            echo "ERROR: got multiple config files"
+            exit 1
+        fi
+        CONFIG_FILE=$filename
+    elif [[ $filename == *.js ]]; then
+        if [ ! -z ${BOT_JS:-} ]; then
+            echo "ERROR: got multiple javascript files"
+            exit 1
+        fi
+        BOT_JS=$filename
+    else
+        echo "ERROR: Unknown argument: $filename"
+        echo "Only *.conf and *.js files are allowed as arguments"
+        exit 1
+    fi
+done
+
+if [ -z ${CONFIG_FILE:-} ]; then
+    CONFIG_FILE="bot.conf"
+fi
+
+if [ ! -e $CONFIG_FILE ]; then
+    echo "ERROR: missing config file: $CONFIG_FILE"
+    exit 1
+fi
+
+if [ -z ${BOT_JS:-} ]; then
+    BOT_JS="src/bot.js"
+fi
+
+if [ ! -e $BOT_JS ]; then
+    echo "ERROR: missing bot entry file: $BOT_JS"
+    exit 1
+fi
+
+source $CONFIG_FILE
+
+# make sure database url is set
+if [ -z ${DATABASE_URL:-} ]; then
+    DATABASE_URL=sqlite:///tokenbot-$TOKEN_APP_USERNAME.sqlite.db
+elif [[ $DATABASE_URL == postgres*://* ]]; then
+    read -d ',' DB_PROTO DB_USER DB_PASS DB_HOST DB_PORT DB_NAME <<< $(echo $DATABASE_URL | perl -lne 'print "$1,$2,$3,$4,$5,$6" if /^(postgres(?:ql)?|sqlite):\/\/([^:@]*)(?::([^@]*))?@([^:\/]*?)(?::(.*?))?\/(.*?)$/')
+    # attempt to do the following based of DATABASE_URL
+    if ! psql $DATABASE_URL >/dev/null 2>&1; then
+        case $OSTYPE in
+            darwin*)
+                echo "Attempting to create database user and database..."
+                if [ ! -z $DB_USER ]; then
+                    if [ ! -z $DB_PASS ]; then
+                        psql -h ${DB_HOST:-localhost} -p ${DB_PORT:-5432} -c "CREATE ROLE $DB_NAME WITH ENCRYPTED PASSWORD '"$DB_PASS"'" || true
+                    else
+                        createuser -h ${DB_HOST:-localhost} -p ${DB_PORT:-5432} $DB_USER || true
+                    fi
+                fi
+                createdb -h ${DB_HOST:-localhost} -p ${DB_PORT:-5432} -O $DB_USER $DB_NAME || true
+                if ! psql $DATABASE_URL >/dev/null 2>&1; then
+                    echo "ERROR: Failed to create database user and database"
+                    exit 1
+                fi
+                ;;
+            linux*)
+                echo "ERROR: Cannot connect to database: $DATABASE_URL."
+                echo "Make sure database exists and access rights are correct"
+                exit 1
+                ;;
+        esac
+    fi
+elif [[ $DATABASE_URL == postgres*://* ]]; then
+    echo "Invalid DATABASE_URL"
+    exit 1
+fi
+
+# default timestamps to be on
+if [ -z ${ENABLE_LOG_TIMESTAMPS:-} ]; then
+    ENABLE_LOG_TIMESTAMPS=1
+fi
+
+# default stage set to production
+if [ -z ${STAGE:-} ]; then
+    $STAGE=production
+fi
+
+# pull headless client
+./gradlew stage
+
+trap killgroup SIGINT
+
+killgroup(){
+    # kill all tasks
+    kill 0
+}
+
+while :; do
+    for (( REDIS_PORT = 30000 ; REDIS_PORT <= 65000 ; REDIS_PORT++ )); do
+        #nc -l -p "$REDIS_PORT" 2>/dev/null && break 2
+        if ! lsof -i -n -P | grep LISTEN | grep -q ":${REDIS_PORT}"; then
+            break 2;
+        fi
+    done
+done
+
+REDIS_URL=redis://localhost:$REDIS_PORT
+
+YMLCONFIG=config/$STAGE.yml
+
+redis-server --port $REDIS_PORT --loglevel warning && killgroup || killgroup &
+STAGE=$STAGE DATABASE_URL=$DATABASE_URL REDIS_URL=$REDIS_URL TOKEN_APP_SEED=$TOKEN_APP_SEED TOKEN_APP_USERNAME=$TOKEN_APP_USERNAME TOKEN_APP_NAME=${TOKEN_APP_NAME:-} TOKEN_APP_AVATAR=${TOKEN_APP_AVATAR:-} java ${JAVA_OPTS+x} -jar ../token-headless-client/build/libs/token-headless-0.1.2-capsule.jar $YMLCONFIG && killgroup || killgroup &
+STAGE=$STAGE DATABASE_URL=$DATABASE_URL REDIS_URL=$REDIS_URL TOKEN_APP_SEED=$TOKEN_APP_SEED TOKEN_APP_USERNAME=$TOKEN_APP_USERNAME TOKEN_APP_NAME=${TOKEN_APP_NAME:-} ENABLE_LOG_TIMESTAMPS=$ENABLE_LOG_TIMESTAMPS LOG_LEVEL=${LOG_LEVEL:-} node_modules/.bin/nodemon -L $BOT_JS $YMLCONFIG && killgroup || killgroup &
+wait
