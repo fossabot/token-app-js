@@ -21,6 +21,7 @@ Read our [guide to creating a Token app](http://developers.tokenbrowser.com/docs
 When ready, fork this repo and deploy it to Heroku.
 
 [![Deploy](https://www.herokucdn.com/deploy/button.svg)](https://heroku.com/deploy)
+[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fdaljeetv%2Ftoken-app-js.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2Fdaljeetv%2Ftoken-app-js?ref=badge_shield)
 
 Then check out [`src/bot.js`](src/bot.js) to start changing the bot logic.
 
@@ -62,3 +63,7 @@ Deploying a Token app requires a few processes to run:
 ## See also
 
 * [https://www.tokenbrowser.com]
+
+
+## License
+[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fdaljeetv%2Ftoken-app-js.svg?type=large)](https://app.fossa.io/projects/git%2Bgithub.com%2Fdaljeetv%2Ftoken-app-js?ref=badge_large)
